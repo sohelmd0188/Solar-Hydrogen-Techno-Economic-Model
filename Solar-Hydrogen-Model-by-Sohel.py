@@ -26,10 +26,12 @@ st.title("Solar Hydrogen Techno-Economic Model")
 st.sidebar.header("Key Constants & Presets")
 
 project_lifetime = 20
-annual_h2_production = 208_800  # kg/year (IIUC system)
+annual_h2_production = 208_800  # kg/year
 
-wacc_baseline = 0.08        # 8%
-wacc_concessional = 0.04   # 4%
+wacc_baseline = 0.08
+wacc_concessional = 0.04
+
+grid_emission_factor = 0.67  # kg CO2 per kWh
 
 solar_capex = st.sidebar.number_input("Solar PV CAPEX (USD)", 1_000_000.0, value=4_500_000.0)
 electrolyzer_capex = st.sidebar.number_input("Electrolyzer CAPEX (USD)", 1_000_000.0, value=6_000_000.0)
@@ -43,15 +45,10 @@ annual_revenue = st.sidebar.number_input("Annual Revenue (USD/year)", 100_000.0,
 # TOTAL CAPEX
 # ============================================================
 
-total_capex = (
-    solar_capex
-    + electrolyzer_capex
-    + fuel_cell_capex
-    + storage_capex
-)
+total_capex = solar_capex + electrolyzer_capex + fuel_cell_capex + storage_capex
 
 # ============================================================
-# FINANCIAL CORE (Paper-aligned)
+# FINANCIAL CORE
 # ============================================================
 
 def capital_recovery_factor(rate, lifetime):
@@ -60,8 +57,7 @@ def capital_recovery_factor(rate, lifetime):
 
 def calculate_lcoh(total_capex, annual_om, annual_rev, h2, rate, lifetime):
     crf = capital_recovery_factor(rate, lifetime)
-    annualized_capex = total_capex * crf
-    return (annualized_capex + annual_om - annual_rev) / h2
+    return (total_capex * crf + annual_om - annual_rev) / h2
 
 
 def calculate_npv(annual_cashflow, total_capex, rate, lifetime):
@@ -69,54 +65,26 @@ def calculate_npv(annual_cashflow, total_capex, rate, lifetime):
     return annual_cashflow * pv_factor - total_capex
 
 
-# ============================================================
-# CALCULATIONS
-# ============================================================
-
 annual_cashflow = annual_revenue - annual_om_cost
 
-lcoh_8 = calculate_lcoh(
-    total_capex,
-    annual_om_cost,
-    annual_revenue,
-    annual_h2_production,
-    wacc_baseline,
-    project_lifetime
-)
+lcoh_8 = calculate_lcoh(total_capex, annual_om_cost, annual_revenue,
+                        annual_h2_production, wacc_baseline, project_lifetime)
 
-lcoh_4 = calculate_lcoh(
-    total_capex,
-    annual_om_cost,
-    annual_revenue,
-    annual_h2_production,
-    wacc_concessional,
-    project_lifetime
-)
+lcoh_4 = calculate_lcoh(total_capex, annual_om_cost, annual_revenue,
+                        annual_h2_production, wacc_concessional, project_lifetime)
 
-npv_8 = calculate_npv(
-    annual_cashflow,
-    total_capex,
-    wacc_baseline,
-    project_lifetime
-)
-
-npv_4 = calculate_npv(
-    annual_cashflow,
-    total_capex,
-    wacc_concessional,
-    project_lifetime
-)
+npv_8 = calculate_npv(annual_cashflow, total_capex, wacc_baseline, project_lifetime)
+npv_4 = calculate_npv(annual_cashflow, total_capex, wacc_concessional, project_lifetime)
 
 payback = total_capex / annual_cashflow if annual_cashflow > 0 else np.nan
 
 # ============================================================
-# OUTPUT — ECONOMIC SUMMARY
+# ECONOMIC SUMMARY
 # ============================================================
 
 st.subheader("Economic Summary")
 
 c1, c2, c3 = st.columns(3)
-
 with c1:
     st.metric("Total CAPEX (USD)", f"${total_capex:,.0f}")
     st.metric("Payback Period (years)", f"{payback:.1f}")
@@ -130,51 +98,52 @@ with c3:
     st.metric("NPV (4% WACC)", f"${npv_4/1e6:.2f} Million")
 
 # ============================================================
-# SENSITIVITY ANALYSIS (One-way)
+# MONTHLY ENERGY MANAGEMENT SIMULATION (EMS)
 # ============================================================
 
-st.subheader("Sensitivity Analysis (LCOH & NPV)")
+st.subheader("Energy Management Simulation (Monthly)")
 
-variation = st.slider("CAPEX variation (%)", 5, 30, 20)
-
-factors = np.linspace(
-    1 - variation / 100,
-    1 + variation / 100,
-    7
+uploaded_file = st.file_uploader(
+    "Upload Monthly Energy Data (Excel or CSV)",
+    type=["xlsx", "csv"]
 )
 
-lcoh_sens = []
-npv_sens = []
+if uploaded_file:
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
-for f in factors:
-    capex_var = total_capex * f
-    lcoh_sens.append(
-        calculate_lcoh(
-            capex_var,
-            annual_om_cost,
-            annual_revenue,
-            annual_h2_production,
-            wacc_baseline,
-            project_lifetime
+    required_cols = ["Month", "Electricity_Demand_kWh", "Solar_Generation_kWh"]
+    if not all(col in df.columns for col in required_cols):
+        st.error("File must contain columns: Month, Electricity_Demand_kWh, Solar_Generation_kWh")
+    else:
+        df["Grid_Import_kWh"] = np.maximum(
+            df["Electricity_Demand_kWh"] - df["Solar_Generation_kWh"], 0
         )
-    )
-    npv_sens.append(
-        calculate_npv(
-            annual_cashflow,
-            capex_var,
-            wacc_baseline,
-            project_lifetime
+        df["Grid_Export_kWh"] = np.maximum(
+            df["Solar_Generation_kWh"] - df["Electricity_Demand_kWh"], 0
         )
-    )
 
-fig, ax1 = plt.subplots()
+        df["CO2_Emitted_kg"] = df["Grid_Import_kWh"] * grid_emission_factor
+        df["CO2_Avoided_kg"] = df["Grid_Export_kWh"] * grid_emission_factor
 
-ax1.plot(factors, lcoh_sens, marker="o")
-ax1.set_xlabel("CAPEX Multiplier")
-ax1.set_ylabel("LCOH ($/kg)")
-ax1.grid(True)
+        st.write("Monthly Energy Balance & CO₂ Mitigation")
+        st.dataframe(df)
 
-st.pyplot(fig)
+        # ====================================================
+        # CO2 MITIGATION PLOT
+        # ====================================================
+
+        fig, ax = plt.subplots()
+        ax.plot(df["Month"], df["CO2_Emitted_kg"], label="CO₂ Emitted")
+        ax.plot(df["Month"], df["CO2_Avoided_kg"], label="CO₂ Avoided")
+        ax.set_ylabel("kg CO₂")
+        ax.set_title("Monthly CO₂ Emission & Mitigation")
+        ax.legend()
+        ax.grid(True)
+
+        st.pyplot(fig)
 
 # ============================================================
 # FOOTER
