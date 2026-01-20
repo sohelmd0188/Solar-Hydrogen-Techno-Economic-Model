@@ -179,7 +179,7 @@ if uploaded_file:
 st.markdown("---")
 st.markdown(
     "<p style='text-align:center; font-size:12px;'>"
-    "this model is designed by Mohammad Sohel"
+    "This model is designed by Mohammad Sohel"
     "</p>",
     unsafe_allow_html=True
 )
