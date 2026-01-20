@@ -31,7 +31,9 @@ annual_h2_production = 208_800  # kg/year
 wacc_baseline = 0.08
 wacc_concessional = 0.04
 
-grid_emission_factor = 0.67  # kg CO2 per kWh
+grid_emission_factor = 0.67  # kg CO2 / kWh
+grid_tariff = st.sidebar.number_input("Grid Electricity Tariff (USD/kWh)", 0.05, value=0.12)
+export_tariff = st.sidebar.number_input("Export Electricity Price (USD/kWh)", 0.02, value=0.08)
 
 solar_capex = st.sidebar.number_input("Solar PV CAPEX (USD)", 1_000_000.0, value=4_500_000.0)
 electrolyzer_capex = st.sidebar.number_input("Electrolyzer CAPEX (USD)", 1_000_000.0, value=6_000_000.0)
@@ -98,10 +100,10 @@ with c3:
     st.metric("NPV (4% WACC)", f"${npv_4/1e6:.2f} Million")
 
 # ============================================================
-# MONTHLY ENERGY MANAGEMENT SIMULATION (EMS)
+# MONTHLY EMS + COST–PROFIT ANALYSIS
 # ============================================================
 
-st.subheader("Energy Management Simulation (Monthly)")
+st.subheader("Monthly Energy, Carbon & Cost–Profit Analysis")
 
 uploaded_file = st.file_uploader(
     "Upload Monthly Energy Data (Excel or CSV)",
@@ -109,41 +111,66 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
 
     required_cols = ["Month", "Electricity_Demand_kWh", "Solar_Generation_kWh"]
     if not all(col in df.columns for col in required_cols):
-        st.error("File must contain columns: Month, Electricity_Demand_kWh, Solar_Generation_kWh")
+        st.error("Required columns: Month, Electricity_Demand_kWh, Solar_Generation_kWh")
     else:
-        df["Grid_Import_kWh"] = np.maximum(
-            df["Electricity_Demand_kWh"] - df["Solar_Generation_kWh"], 0
-        )
-        df["Grid_Export_kWh"] = np.maximum(
-            df["Solar_Generation_kWh"] - df["Electricity_Demand_kWh"], 0
-        )
+        df["Grid_Import_kWh"] = np.maximum(df["Electricity_Demand_kWh"] - df["Solar_Generation_kWh"], 0)
+        df["Grid_Export_kWh"] = np.maximum(df["Solar_Generation_kWh"] - df["Electricity_Demand_kWh"], 0)
+
+        df["Import_Cost_USD"] = df["Grid_Import_kWh"] * grid_tariff
+        df["Export_Revenue_USD"] = df["Grid_Export_kWh"] * export_tariff
+        df["Net_Profit_USD"] = df["Export_Revenue_USD"] - df["Import_Cost_USD"]
 
         df["CO2_Emitted_kg"] = df["Grid_Import_kWh"] * grid_emission_factor
         df["CO2_Avoided_kg"] = df["Grid_Export_kWh"] * grid_emission_factor
 
-        st.write("Monthly Energy Balance & CO₂ Mitigation")
+        st.write("Monthly Cost–Profit & CO₂ Mitigation Table")
         st.dataframe(df)
 
         # ====================================================
-        # CO2 MITIGATION PLOT
+        # PLOTS
         # ====================================================
 
         fig, ax = plt.subplots()
-        ax.plot(df["Month"], df["CO2_Emitted_kg"], label="CO₂ Emitted")
-        ax.plot(df["Month"], df["CO2_Avoided_kg"], label="CO₂ Avoided")
-        ax.set_ylabel("kg CO₂")
-        ax.set_title("Monthly CO₂ Emission & Mitigation")
-        ax.legend()
+        ax.bar(df["Month"], df["Net_Profit_USD"])
+        ax.set_ylabel("USD")
+        ax.set_title("Monthly Net Cost–Profit")
         ax.grid(True)
-
         st.pyplot(fig)
+
+        fig2, ax2 = plt.subplots()
+        ax2.plot(df["Month"], df["CO2_Avoided_kg"], label="CO₂ Avoided")
+        ax2.plot(df["Month"], df["CO2_Emitted_kg"], label="CO₂ Emitted")
+        ax2.set_ylabel("kg CO₂")
+        ax2.set_title("Monthly CO₂ Emission & Mitigation")
+        ax2.legend()
+        ax2.grid(True)
+        st.pyplot(fig2)
+
+        # ====================================================
+        # AUTOMATIC NARRATIVE
+        # ====================================================
+
+        profitable_months = (df["Net_Profit_USD"] > 0).sum()
+        total_months = len(df)
+
+        st.subheader("Automatic Cost–Profit Interpretation")
+
+        st.markdown(
+            f"""
+            The monthly energy management simulation indicates that the system achieves
+            **net positive cash flow in {profitable_months} out of {total_months} months**.
+            Periods of profitability are primarily driven by excess solar electricity exported
+            to the grid, while deficit months are associated with higher grid import requirements.
+
+            From an environmental perspective, the system demonstrates consistent carbon
+            mitigation potential, with solar-based electricity significantly offsetting
+            grid-related CO₂ emissions over the annual cycle.
+            """
+        )
 
 # ============================================================
 # FOOTER
